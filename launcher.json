@@ -1,6 +1,6 @@
 {
-    "ip_server_one": "45.155.207.161",
-    "ip_server_one_port": "7006",
+    "ip_server_one": "127.0.0.1",
+    "ip_server_one_port": "7777",
     
     "site_link": "https://soundcloud.com/discover/sets/track-stations:2126030205",
     "forum_link": "https://soundcloud.com/discover/sets/track-stations:2126030205",
@@ -43,6 +43,7 @@
     "SizeDataGBObnov": "2.5 GB"
 
 }
+
 
 
 
