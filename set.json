@@ -1,0 +1,41 @@
+{
+    "ip": ".",
+    "vk_link": ".",
+    "youtube_link": ".",
+    "discord_link": ".",
+    "site_link": "https://forum-chernikovka.ru/",
+    "forum_link": "https://forum-chernikovka.ru/",
+    "donate_link": "https://forum-chernikovka.ru/",
+    "password": "123123123",
+    "white_ip": "",
+    "black_ip": "",
+
+    "version_launcher": "1.0.0",
+    "version_game": "1.0.0",
+
+    "url_game": "https://forum-chernikovka.ru/launcher/chernika.zip",
+    "url_obnov_game": "https://forum-chernikovka.ru/launcher/obnov.zip",
+    "url_updater_launcher": ".",
+
+    "date_news_1": "15.07.2008",
+    "date_news_2": "15.07.2008",
+    "date_news_3": "15.07.2008",
+    "date_news_4": "15.07.2008",
+
+    "text_news_1": "Тут будет ваш текст",
+    "text_news_2": "Тут будет ваш текст",
+    "text_news_3": "Тут будет ваш текст",
+    "text_news_4": "Тут будет ваш текст",
+
+     "img_news_1": "https://i.imgur.com/4XetXLX.png",
+    "img_news_2": "https://i.imgur.com/4XetXLX.png",
+    "img_news_3": "https://i.imgur.com/4XetXLX.png",
+    "img_news_4": "https://i.imgur.com/4XetXLX.png",
+ 
+    "SizeGames": "6200",
+    "SizeGamesGB": "6.2 GB",
+
+    "SizeObnov": "2500",
+    "SizeGamesGBObnov": "2.5 GB"
+
+}
