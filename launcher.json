@@ -17,8 +17,8 @@
     "url_obnov_data": "",
 
     "news_number_one": "https://i.imgur.com/XaQe0ef.png",
-    "news_number_one_title": "Жду свои USDT День 1",
-    "news_number_one_text": "Тест Тест Тест Тест Тест Тест 1",
+    "news_number_one_title": "Сентябрьское обновление",
+    "news_number_one_text": "Состоялся релиз нового обновления!\nОбновили функционал и маппинг департамента шерифов!",
 
     "news_number_two": "https://i.imgur.com/XaQe0ef.png",
     "news_number_two_title": "Новости Новости 2",
@@ -43,6 +43,7 @@
     "SizeDataGBObnov": "2.5 GB"
 
 }
+
 
 
 
