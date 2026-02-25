@@ -1,6 +1,6 @@
 {
-    "ip_server_one": "127.0.0.1",
-    "ip_server_one_port": "7777",
+    "ip_server_one": "147.135.229.229",
+    "ip_server_one_port": "1221",
     
     "site_link": "https://soundcloud.com/discover/sets/track-stations:2126030205",
     "forum_link": "https://soundcloud.com/discover/sets/track-stations:2126030205",
@@ -10,8 +10,8 @@
     "version_game": "1.0.0",
     "version_data": "1.0.0",
 
-    "url_game": "https://www.4sync.com/web/directDownload/1yHRrFz2/NrZF-0Pk.fb6765f4ee2df7fdd153b21f2e472052",
-    "url_obnov_game": "https://www.4sync.com/web/directDownload/sOBh3BW_/NrZF-0Pk.ac4de94fb40bc28c0c7680f5aafafea3",
+    "url_game": "https://disk.yandex.by/d/EaBNLfsr3ZSiVg",
+    "url_obnov_game": "https://disk.yandex.by/d/EaBNLfsr3ZSiVg",
     "url_updater_launcher": "",
     "url_data": "https://www.4sync.com/web/directDownload/a25-yroy/NrZF-0Pk.7b3afb5462502de4e7202d5ce5e1b337",
     "url_obnov_data": "",
@@ -43,6 +43,7 @@
     "SizeDataGBObnov": "2.5 GB"
 
 }
+
 
 
 
