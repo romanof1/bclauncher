@@ -5,7 +5,12 @@
 
   "site_link": "https://bonecountyrp.ru/",
   "forum_link": "https://bonecountyrp.ru/",
+  "support_link": "https://bonecountyrp.ru/",
   "donate_link": "https://bonecountyrp.ru/",
+
+  "vk_link": "https://vk.com/bonecountyrp",
+  "telegram_link": "https://t.me/bonecountyrp",
+  "discord_link": "https://discord.gg/bonecountyrp",
 
   "version_launcher": "1.0.0",
   "version_game": "1.0.0",
@@ -17,34 +22,36 @@
   "url_data": "https://www.4sync.com/web/directDownload/a25-yroy/NrZF-0Pk.7b3afb5462502de4e7202d5ce5e1b337",
   "url_obnov_data": "",
 
-    "news_number_one": "https://i.ibb.co/Ng66fC4V/1.png",
-    "news_number_one_title": "РОЗЫГРЫШ АВТОМОБИЛЕЙ!",
-    "news_number_one_text": "Прямо сейчас в нашем телеграм канале. Заходи!",
+  "news_number_one": "https://i.ibb.co/Ng66fC4V/1.png",
+  "news_number_one_title": "РОЗЫГРЫШ АВТОМОБИЛЕЙ!",
+  "news_number_one_text": "Прямо сейчас в нашем телеграм канале. Заходи!",
+  "news_number_two": "https://i.ibb.co/7dQqxjz0/2.png",
+  "news_number_two_title": "ИЮНЬСКОЕ ОБНОВЛНЕИЕ",
+  "news_number_two_text": "Уже доступно на сервере! Заходи и тестируй!",
+  "news_number_tree": "https://i.ibb.co/hJfkcjrd/4.png",
+  "news_number_tree_title": "БАЙКЕРЫ СНОВА В ДЕЛЕ!",
+  "news_number_tree_text": "Мы добавили более 50 скинов для байкеров!",
+  "news_number_four": "https://i.ibb.co/C3cd683N/image.png",
+  "news_number_four_title": "ОБНОВЛЕНИЕ ШЕРИФОВ",
+  "news_number_four_text": "Новое здание, машины и скины уже на сервере!",
 
-    "news_number_two": "https://i.ibb.co/7dQqxjz0/2.png",
-    "news_number_two_title": "ИЮНЬСКОЕ ОБНОВЛНЕИЕ",
-    "news_number_two_text": "Уже доступно на сервере! Заходи и тестируй!",
+  "file_1": "F1Helper",
+  "file_2": "nyt_camhunt",
 
-    "news_number_tree": "https://i.ibb.co/hJfkcjrd/4.png",
-    "news_number_tree_title": "БАЙКЕРЫ СНОВА В ДЕЛЕ!",
-    "news_number_tree_text": "Мы добавили более 50 скинов для байкеров!",
+  "img_pers": "https://i.ibb.co/XfZ6gVzS/1.png",
 
-    "news_number_four": "https://i.ibb.co/C3cd683N/image.png",
-    "news_number_four_title": "ОБНОВЛЕНИЕ ШЕРИФОВ",
-    "news_number_four_text": "Новое здание, машины и скины уже на сервере!",
+  "background_one": "",
+  "background_two": "",
+  "background_three": "",
+  "background_four": "",
+  "background_five": "",
 
-    "file_1": "F1Helper",
-    "file_2": "nyt_camhunt",
-    "img_pers": "https://i.ibb.co/XfZ6gVzS/1.png",
+  "copyright": "© 2026 Bone County Roleplay — Все права защищены",
 
-    
-    "SizeGames": "6200",
-    "SizeGamesGB": "6.2 GB",
-
-    "SizeObnov": "2500",
-    "SizeGamesGBObnov": "2.5 GB",
-
-    "SizeData": "2500",
-    "SizeDataGBObnov": "2.5 GB"
-
+  "SizeGames": "6200",
+  "SizeGamesGB": "6.2 GB",
+  "SizeObnov": "2500",
+  "SizeGamesGBObnov": "2.5 GB",
+  "SizeData": "2500",
+  "SizeDataGBObnov": "2.5 GB"
 }
