@@ -1,6 +1,6 @@
 {
-  "ip_server_one": "147.135.229.229",
-  "ip_server_one_port": "1221",
+  "ip_server_one": "185.207.214.14",
+  "ip_server_one_port": "2705",
   "password_server_one": "",
 
   "site_link": "https://bonecountyrp.online/",
@@ -16,7 +16,7 @@
   "version_game": "1.0.0",
   "version_data": "1.0.0",
 
-  "url_game": "https://disk.yandex.by/d/EaBNLfsr3ZSiVg",
+  "url_game": "http://45.136.204.40/games.zip",
   "url_obnov_game": "",
   "url_updater_launcher": "",
   "url_data": "https://www.4sync.com/web/directDownload/a25-yroy/NrZF-0Pk.7b3afb5462502de4e7202d5ce5e1b337",
@@ -35,7 +35,7 @@
   "news_number_four_title": "ОБНОВЛЕНИЕ ШЕРИФОВ",
   "news_number_four_text": "Новое здание, машины и скины уже на сервере!",
 
-  "file_1": "F1Helper",
+  "file_1": "bcproject",
   "file_2": "nyt_camhunt",
 
   "img_pers": "https://i.ibb.co/20WYrhbD/222.png",
