@@ -12,13 +12,13 @@
   "telegram_link": "https://t.me/bcrpru",
   "discord_link": "https://discord.gg/EsdrVwatT",
 
-  "version_launcher": "1.0.1",
+  "version_launcher": "1.0.2",
   "version_game": "1.0.1",
   "version_data": "1.0.0",
 
   "url_game": "http://45.136.204.40/games.zip",
   "url_obnov_game": "",
-  "url_updater_launcher": "https://bonecountyrp.online/setup.exe",
+  "url_updater_launcher": "http://45.136.204.40/BONECOUNTY.exe",
   "url_data": "",
   "url_obnov_data": "",
   "full_reinstall_game": "1",
