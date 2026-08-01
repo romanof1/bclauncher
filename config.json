@@ -13,15 +13,15 @@
   "discord_link": "https://discord.gg/EsdrVwatT",
 
   "version_launcher": "1.0.2",
-  "version_game": "1.0.1",
+  "version_game": "1.0.2",
   "version_data": "1.0.0",
 
   "url_game": "http://45.136.204.40/games.zip",
-  "url_obnov_game": "",
+  "url_obnov_game": "http://45.136.204.40/patch.zip",
   "url_updater_launcher": "http://45.136.204.40/BONECOUNTY.exe",
   "url_data": "",
   "url_obnov_data": "",
-  "full_reinstall_game": "1",
+  "full_reinstall_game": "0",
 
   "news_number_one": "https://i.ibb.co/Ng66fC4V/1.png",
   "news_number_one_title": "РОЗЫГРЫШ АВТОМОБИЛЕЙ!",
@@ -51,8 +51,8 @@
 
   "SizeGames": "2220",
   "SizeGamesGB": "2.2 GB",
-  "SizeObnov": "2220",
-  "SizeGamesGBObnov": "2.2 GB",
+  "SizeObnov": "37",
+  "SizeGamesGBObnov": "3.7 MB",
   "SizeData": "2500",
   "SizeDataGBObnov": "2.5 GB"
 }
