@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Спарта — вступление</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  html,body{margin:0;background:#15181f;color:#EEE4D2;font:14px Inter,system-ui,sans-serif}
+  canvas{display:block;width:min(100vw,177.78vh);height:auto;margin:0 auto;background:#EEE4D2}
+  #ui{display:flex;gap:10px;align-items:center;padding:8px 16px}
+  #ui input{flex:1}
+  body.export #ui{display:none}
+  body.export canvas{width:1920px;height:1080px}
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<div id="ui"><button id="pp">▶︎ / ❚❚</button><input id="sc" type="range" min="0" max="41.4" step="0.0166667" value="0"><span id="tm">0.00</span></div>
+<audio id="au" src="audio/mix.wav" preload="auto"></audio>
+<script>
+'use strict';
+/* =====================================================================
+   Спарта — вступление. Детерминированный таймлайн: renderAt(t).
+   2.5D-камера: масштаб слоя = F/(d - cam.z) → настоящий параллакс.
+   ===================================================================== */
+const W = 1920, H = 1080, FPS = 60, DUR = 41.4, F = 1000;
+const SUB = 3, SHUTTER = 0.5;           // motion blur: 3 подкадра, затвор 180°
+const P = {
+  bg:  [238,228,210], ink: [31,37,51], red: [200,64,43],
+  och: [217,154,62],  sl:  [94,113,134]
+};
+const rgb = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const rng = (t, a, b) => clamp((t - a) / (b - a));
+const hr = i => { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const E = {
+  lin: t => t,
+  io: t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2,
+  s: t => -(Math.cos(Math.PI * t) - 1) / 2,
+  o: t => 1 - Math.pow(1 - t, 3),
+  o5: t => 1 - Math.pow(1 - t, 5),
+  i: t => t * t * t,
+  i2: t => t * t,
+  ob: t => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }
+};
+/* Сплайн Эрмита (Catmull-Rom по времени): непрерывная скорость, без остановок на ключах */
+function spl(t, k) {
+  const n = k.length;
+  if (t <= k[0][0]) return k[0][1];
+  if (t >= k[n - 1][0]) return k[n - 1][1];
+  let i = 0; while (t > k[i + 1][0]) i++;
+  const [t0, v0] = k[i], [t1, v1] = k[i + 1];
+  const m = j => (j <= 0 || j >= n - 1) ? 0 : (k[j + 1][1] - k[j - 1][1]) / (k[j + 1][0] - k[j - 1][0]);
+  const h = t1 - t0, u = (t - t0) / h;
+  const u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * v0 + (u3 - 2 * u2 + u) * h * m(i) + (-2 * u3 + 3 * u2) * v1 + (u3 - u2) * h * m(i + 1);
+}
+const camOf = (K, t) => ({ x: spl(t, K.x), y: spl(t, K.y), z: spl(t, K.z), rot: spl(t, K.r), f: K.f || 1000, dof: K.dof || 9 });
+
+/* ---------- холсты ---------- */
+const cv = document.getElementById('c'), main = cv.getContext('2d');
+const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
+const frC = mk(), fr = frC.getContext('2d');
+const s1C = mk(), s1 = s1C.getContext('2d');
+const s2C = mk(), s2 = s2C.getContext('2d');
+const offC = mk(), og = offC.getContext('2d');
+let G = fr;
+
+function proj(g, cam, d) {
+  const s = F / (d - cam.z);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.translate(W / 2, H / 2); g.rotate(cam.rot); g.scale(s, s); g.translate(-cam.x, -cam.y);
+  return s;
+}
+function toScreen(cam, d, X, Y) {
+  const s = F / (d - cam.z), x = (X - cam.x) * s, y = (Y - cam.y) * s;
+  const c = Math.cos(cam.rot), sn = Math.sin(cam.rot);
+  return [W / 2 + x * c - y * sn, H / 2 + x * sn + y * c];
+}
+function polyClip(g, pts) { g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.closePath(); g.clip(); }
+/* Слой глубины d: DOF-размытие от расстояния до фокуса, опц. альфа и экранная маска */
+function layer(cam, d, fn, opt = {}) {
+  const dz = d - cam.z; if (dz < 30) return;
+  const s = F / dz;
+  let b = opt.blur != null ? opt.blur : Math.min(18, Math.abs(F / dz - F / (cam.f - cam.z)) * cam.dof);
+  b += opt.addBlur || 0;
+  const a = opt.alpha == null ? 1 : opt.alpha;
+  if (a <= 0.002) return;
+  if (b < 0.6 && a >= 1) {
+    G.save();
+    if (opt.clip) { G.setTransform(1, 0, 0, 1, 0, 0); polyClip(G, opt.clip); }
+    proj(G, cam, d); fn(G, s); G.restore(); return;
+  }
+  og.setTransform(1, 0, 0, 1, 0, 0); og.clearRect(0, 0, W, H);
+  og.save(); proj(og, cam, d); fn(og, s); og.restore();
+  G.save(); G.setTransform(1, 0, 0, 1, 0, 0);
+  if (opt.clip) polyClip(G, opt.clip);
+  if (b >= 0.6) G.filter = `blur(${b.toFixed(2)}px)`;
+  G.globalAlpha = a; G.drawImage(offC, 0, 0); G.restore();
+}
+function shadow(g, s, k = 1, a = 0.16) {
+  g.shadowColor = rgb(P.ink, a); g.shadowBlur = 26 * k; g.shadowOffsetX = 0; g.shadowOffsetY = 10 * k;
+}
+function noShadow(g) { g.shadowColor = 'transparent'; g.shadowBlur = 0; g.shadowOffsetY = 0; }
+function circ(g, x, y, r, c) { if (r <= 0) return; g.fillStyle = rgb(c); g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); }
+function rect(g, x, y, w, h, c) { g.fillStyle = rgb(c); g.fillRect(x, y, w, h); }
+function poly(g, pts, c) { g.fillStyle = rgb(c); g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.closePath(); g.fill(); }
+function line(g, x1, y1, x2, y2, w, c, cap = 'round') { g.strokeStyle = rgb(c); g.lineWidth = w; g.lineCap = cap; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); }
+function roundPoly(g, pts, rads) {
+  const n = pts.length; g.beginPath();
+  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const st = mid(pts[n - 1], pts[0]); g.moveTo(st[0], st[1]);
+  for (let i = 0; i < n; i++) { const p = pts[i], q = pts[(i + 1) % n]; g.arcTo(p[0], p[1], q[0], q[1], rads[i]); }
+  g.closePath();
+}
+/* Каменный фриз: цвет уходит в охро-чернильную монохромию */
+const STA = mix(P.ink, P.och, 0.5);
+function stone(c, f) {
+  if (f <= 0) return c;
+  const L = (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) / 255;
+  return mix(c, mix(STA, P.bg, clamp((L - 0.1) / 0.85)), f);
+}
+
+/* =====================================================================
+   ТИПОГРАФИКА
+   ===================================================================== */
+const FONTS = { O7: (s) => `700 ${s}px Oswald`, O4: (s) => `400 ${s}px Oswald`, P9: (s) => `900 ${s}px "Playfair Display"`, Pi: (s) => `italic 700 ${s}px "Playfair Display"` };
+const mcache = {};
+function charXs(str, f, size, track) {
+  const key = str + '|' + f + '|' + size + '|' + track;
+  if (mcache[key]) return mcache[key];
+  fr.save(); fr.font = FONTS[f](size);
+  const xs = [], ws = [];
+  for (let i = 0; i < str.length; i++) {
+    xs.push(fr.measureText(str.slice(0, i)).width + i * track * size);
+    ws.push(fr.measureText(str[i]).width);
+  }
+  const total = fr.measureText(str).width + (str.length - 1) * track * size;
+  fr.restore();
+  return (mcache[key] = { xs, ws, total });
+}
+const textW = (str, f, size, track = 0) => charXs(str, f, size, track).total;
+
+function drawText(it, t, cam) {
+  const din = it.din || 0.7, dout = it.dout || 0.45;
+  if (t < it.t0 || t > it.t1 + dout + (it.fout === 'fall' ? 1.4 : 0)) return;
+  const p = rng(t, it.t0, it.t0 + din), q = rng(t, it.t1, it.t1 + dout);
+  const g = G; g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const drift = (it.vx == null ? -9 : it.vx) * (t - it.t0);
+  g.translate(W / 2, H / 2); g.rotate((cam ? cam.rot : 0) * 0.45); g.translate(-W / 2 + drift, -H / 2);
+  if (it.shake) { const [sx, sy] = it.shake(t); g.translate(sx, sy); }
+  let x = it.x, y = it.y, size = it.size;
+  if (it.move) {
+    const m = it.move, u = E.io(rng(t, m.t0, m.t1));
+    x = lerp(x, m.x, u); y = lerp(y, m.y, u); size = lerp(size, size * m.sc, u);
+  }
+  let track = it.track || 0;
+  if (it.trackTo != null) track = lerp(track, it.trackTo, E.s(rng(t, it.t0, it.t1 + dout)));
+  const fin = it.fin || 'up', fout = it.fout || 'up';
+  const M = charXs(it.s, it.f, size, track);
+  const n = it.s.length, spread = it.spread == null ? 0.35 : it.spread;
+  let x0 = it.al === 'c' ? x - M.total / 2 : it.al === 'r' ? x - M.total : x;
+  if (fin === 'track' && p < 1) { /* разрядка сжимается к центру */ }
+  let col = typeof it.col === 'function' ? it.col(t) : it.col;
+  let A = it.alpha == null ? 1 : it.alpha;
+  if (it.dim) A *= lerp(1, it.dim.a, E.io(rng(t, it.dim.t, it.dim.t + 0.4)));
+  g.font = FONTS[it.f](size); g.textBaseline = 'alphabetic';
+  const needClip = (fin === 'up' && p < 1) || (fout === 'up' && q > 0);
+  if (needClip) { g.beginPath(); g.rect(x0 - size, y - size * 1.02, M.total + size * 2, size * 1.3); g.clip(); }
+  const sh = it.noShadow ? 0 : 1;
+  for (let i = 0; i < n; i++) {
+    const ch = it.s[i]; if (ch === ' ') continue;
+    const off = n > 1 ? spread * i / (n - 1) : 0;
+    const pi = clamp((p - off) / (1 - spread)), qi = clamp((q - off) / (1 - spread));
+    let dx = 0, dy = 0, sc = 1, sy = 1, sk = 0, a = A, rot = 0;
+    const cx = x0 + M.xs[i] + M.ws[i] / 2;
+    if (fin === 'up') dy += (1 - E.o5(pi)) * size * 1.05;
+    else if (fin === 'scale') { sc = lerp(1.9, 1, E.o5(pi)); a *= E.o(pi); }
+    else if (fin === 'track') { dx += (1 - E.o5(p)) * size * 0.55 * (i - (n - 1) / 2); a *= E.o(pi); }
+    else if (fin === 'slide') { dx += (1 - E.o5(pi)) * size * 0.9; a *= E.o(pi); }
+    else if (fin === 'tilt') { sy = Math.max(0.001, E.o5(pi)); sk = (1 - E.o5(pi)) * -0.7; a *= clamp(pi * 3); }
+    else if (fin === 'impact') { sc = lerp(1.7, 1, E.o5(p)) * (1 + 0.04 * Math.sin(rng(t, it.t0, it.t0 + .6) * Math.PI * 3) * (1 - p)); a *= clamp(p * 4); }
+    if (fout === 'up') dy -= E.i(qi) * size * 1.05;
+    else if (fout === 'fade') { a *= 1 - E.s(q); dy -= E.s(q) * 18; }
+    else if (fout === 'fall' && t > it.t1) {
+      const tt = Math.max(0, t - it.t1 - i * 0.045 - hr(i + n) * 0.06);
+      dy += 0.5 * 3400 * tt * tt; rot = tt * (hr(i * 3.1) - 0.5) * 7; dx += (hr(i * 5.7) - 0.5) * 260 * tt;
+    }
+    if (a <= 0.003) continue;
+    g.save();
+    g.translate(cx + dx, y + dy);
+    if (rot) g.rotate(rot);
+    if (sc !== 1) g.scale(sc, sc);
+    if (sy !== 1 || sk) g.transform(1, 0, sk, sy, 0, 0);
+    g.globalAlpha = a;
+    if (sh) { g.shadowColor = rgb(P.ink, 0.17 * a); g.shadowBlur = size * 0.16; g.shadowOffsetY = size * 0.06; }
+    g.fillStyle = rgb(col);
+    g.fillText(ch, -M.ws[i] / 2, 0);
+    g.restore();
+  }
+  if (it.strike) {
+    const u = E.io(rng(t, it.strike.t, it.strike.t + 0.35)) * (1 - q);
+    if (u > 0) line(g, x0 - size * 0.08, y - size * 0.3, x0 - size * 0.08 + (M.total + size * 0.16) * u, y - size * 0.3, size * 0.07, it.strike.col, 'butt');
+  }
+  g.restore();
+}
+/* Строка из нескольких фрагментов разного кегля/начертания с общей базовой линией */
+function row(parts, x, y, al = 'l', gap = 0.28) {
+  const ws = parts.map(p => textW(p.s, p.f, p.size, p.track || 0));
+  const gaps = parts.map(p => p.size * gap);
+  let total = ws.reduce((a, b) => a + b, 0) + gaps.slice(1).reduce((a, b) => a + b, 0);
+  let cx = al === 'c' ? x - total / 2 : al === 'r' ? x - total : x;
+  return parts.map((p, i) => { const o = Object.assign({}, p, { x: cx, y, al: 'l' }); cx += ws[i] + (gaps[i + 1] || 0); return o; });
+}
+
+/* =====================================================================
+   СЦЕНА A · 0–13.5 · «300 против несметной» → застывший фриз храма
+   ===================================================================== */
+const camA = {
+  x: [[0, -520], [3, 150], [5.8, 700], [7.2, 900], [8.6, 1550], [9.6, 2450], [10.5, 2900], [13.6, 3150]],
+  y: [[0, 60], [5.8, 40], [7.2, 80], [8.6, 330], [10.5, 545], [13.6, 565]],
+  z: [[0, 280], [3, 120], [5.8, -150], [7.2, -520], [8.6, -2050], [9.6, -3400], [10.5, -4100], [13.6, -4500]],
+  r: [[0, -0.012], [3, 0.006], [5.8, 0.02], [8.6, 0.0], [13.6, -0.012]],
+  f: 1000, dof: 9
+};
+let REF = null; // камера в момент «застывания» — для сплющивания глубины в рельеф
+const BAND = { x0: -1300, x1: 3100, y0: -330, y1: 470 };
+const ROWS = [3900, 3000, 2300, 1800, 1400].map((d, k) => ({ d, Y: [195, 240, 276, 306, 322][k], k }));
+
+function flatLayer(cam, d, fl, fn, opt) {
+  const dd = lerp(d, 1000 + (d - 1000) * 0.015, fl);
+  const k = (dd - REF.z) / (d - REF.z);
+  layer(cam, dd, (g, s) => { g.translate(REF.x, REF.y); g.scale(k, k); g.translate(-REF.x, -REF.y); fn(g, s * k); }, opt);
+}
+function visRange(cam, d, margin = 300) { const s = F / (d - cam.z); const hw = (W * 0.62) / s + margin; return [cam.x - hw, cam.x + hw]; }
+
+function persianRow(g, cam, R, te, C, s) {
+  const [a, b] = visRange(cam, R.d);
+  const tone = clamp((R.d - 1400) / 2500) * 0.55;
+  const body = C(mix(P.sl, P.bg, tone)), spear = C(mix(mix(P.ink, P.sl, 0.4), P.bg, tone)), shieldc = C(mix(mix(P.sl, P.ink, 0.35), P.bg, tone));
+  const sp = 64, x0 = 250 + R.k * 23;
+  const i0 = Math.max(0, Math.floor((a - x0) / sp)), i1 = Math.min(400, Math.ceil((b - x0) / sp));
+  g.fillStyle = rgb(body); g.beginPath();
+  for (let i = i0; i <= i1; i++) {
+    const x = x0 + i * sp + (hr(i * 3 + R.k) - .5) * 16, Y = R.Y + (hr(i + R.k * 7) - .5) * 8;
+    g.rect(x - 20, Y - 122, 40, 122); g.moveTo(x + 16, Y - 140); g.arc(x, Y - 140, 16, 0, Math.PI * 2);
+  }
+  g.fill();
+  g.fillStyle = rgb(shieldc); g.beginPath();
+  for (let i = i0; i <= i1; i++) { if (i % 2) continue; const x = x0 + i * sp + (hr(i * 3 + R.k) - .5) * 16, Y = R.Y + (hr(i + R.k * 7) - .5) * 8; g.rect(x - 30, Y - 110, 26, 84); }
+  g.fill();
+  g.strokeStyle = rgb(spear); g.lineWidth = 5; g.beginPath();
+  const tips = [];
+  for (let i = i0; i <= i1; i++) {
+    const x = x0 + i * sp + (hr(i * 3 + R.k) - .5) * 16 + 22, Y = R.Y + (hr(i + R.k * 7) - .5) * 8;
+    const sw = Math.sin(te * 1.7 + i * 0.63 + R.k) * 7;
+    g.moveTo(x, Y - 30); g.lineTo(x + sw, Y - 320); tips.push([x + sw, Y - 320]);
+  }
+  g.stroke();
+  g.fillStyle = rgb(spear); g.beginPath();
+  for (const [x, y] of tips) { g.moveTo(x - 9, y + 4); g.lineTo(x, y - 30); g.lineTo(x + 9, y + 4); g.closePath(); }
+  g.fill();
+}
+function hoplite(g, x, Y, C, te, i) {
+  const bob = Math.sin(te * 2.6 + i * 1.3) * 3;
+  const y = Y + bob;
+  // тень контакта
+  g.fillStyle = rgb(P.ink, 0.13); g.beginPath(); g.ellipse(x + 10, Y + 4, 90, 14, 0, 0, Math.PI * 2); g.fill();
+  // копьё вперёд-вверх
+  line(g, x - 70, y - 20, x + 300, y - 330 + Math.sin(te * 1.3 + i) * 4, 9, C(P.ink));
+  poly(g, [[x + 286, y - 318], [x + 330, y - 362], [x + 304, y - 300]], C(P.ink));
+  // ноги
+  rect(g, x - 34, y - 110, 22, 110, C(P.ink)); rect(g, x + 14, y - 110, 22, 110, C(P.ink));
+  // шлем с гребнем
+  circ(g, x, y - 300, 44, C(P.och));
+  g.fillStyle = rgb(C(P.ink)); g.beginPath(); g.ellipse(x - 6, y - 344, 60, 24, 0, Math.PI, Math.PI * 2); g.fill();
+  rect(g, x - 5, y - 306, 10, 40, C(P.ink)); rect(g, x - 26, y - 312, 52, 10, C(P.ink));
+  // щит-гоплон
+  shadow(g, 1, 0.8, 0.15);
+  circ(g, x, y - 170, 100, C(P.och)); noShadow(g);
+  circ(g, x, y - 170, 86, C(P.red));
+  g.strokeStyle = rgb(C(P.ink)); g.lineWidth = 14; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(x - 34, y - 132); g.lineTo(x, y - 214); g.lineTo(x + 34, y - 132); g.stroke();
+}
+function columnShape(g, cx, top, bot, w, cl, cd, cs) {
+  const tw = w * 0.86;
+  poly(g, [[cx - tw / 2, top + 70], [cx + tw / 2, top + 70], [cx + w / 2, bot], [cx - w / 2, bot]], cl);
+  for (let k = 1; k < 5; k++) { const u = k / 5; line(g, cx - tw / 2 + tw * u, top + 90, cx - w / 2 + w * u, bot - 10, 7, cd, 'butt'); }
+  poly(g, [[cx - w * 0.62, top + 30], [cx + w * 0.62, top + 30], [cx + tw / 2, top + 72], [cx - tw / 2, top + 72]], cs);
+  rect(g, cx - w * 0.72, top, w * 1.44, 32, cl);
+}
+function sceneA(t, cam) {
+  const fz = E.io(rng(t, 7.2, 8.1));
+  const fl = E.io(rng(t, 7.35, 8.9));
+  const ck = E.io(rng(t, 7.35, 8.6));
+  const te = t < 7.2 ? t : 7.2 + (1 - Math.exp(-(t - 7.2) * 7)) / 7;
+  const C = c => stone(c, fz);
+  G.setTransform(1, 0, 0, 1, 0, 0); G.fillStyle = rgb(P.bg); G.fillRect(0, 0, W, H);
+  // маска фриза в мировых координатах d=1000 → экран
+  let clip = null;
+  if (ck > 0) {
+    const ex = (1 - ck) * 9000;
+    const r = { x0: BAND.x0 - ex, x1: BAND.x1 + ex, y0: BAND.y0 - ex, y1: BAND.y1 + ex };
+    clip = [toScreen(cam, 1000, r.x0, r.y0), toScreen(cam, 1000, r.x1, r.y0), toScreen(cam, 1000, r.x1, r.y1), toScreen(cam, 1000, r.x0, r.y1)];
+  }
+  const o = { clip };
+  if (ck > 0) { // фон рельефа
+    layer(cam, 1000, g => rect(g, BAND.x0, BAND.y0, BAND.x1 - BAND.x0, BAND.y1 - BAND.y0, C(P.bg)), { blur: 0 });
+  }
+  // солнце и горы
+  flatLayer(cam, 6000, fl, g => circ(g, 3200, -1700, 950, C(mix(P.bg, P.och, 0.5))), o);
+  flatLayer(cam, 4500, fl, g => {
+    const c = C(mix(P.bg, P.sl, 0.28));
+    poly(g, [[-6000, 300], [-3500, -700], [-1500, -150], [800, -900], [3200, -250], [5600, -1050], [9000, -200], [12000, -800], [16000, 300]], c);
+  }, o);
+  flatLayer(cam, 3000, fl, g => rect(g, -30000, 60, 70000, 30000, C(mix(P.bg, P.och, 0.3))), o);
+  for (const R of ROWS) flatLayer(cam, R.d, fl, (g, s) => persianRow(g, cam, R, te, C, s), o);
+  // земля спартанцев и строй
+  flatLayer(cam, 1000, fl, g => {
+    rect(g, -30000, 300, 70000, 30000, C(mix(P.bg, P.och, 0.52)));
+    for (let i = 0; i < 9; i++) hoplite(g, -1180 + i * 122, 300, C, te, i);
+  }, o);
+  // пыль на среднем плане
+  flatLayer(cam, 700, fl, g => {
+    for (let i = 0; i < 26; i++) {
+      const x = -1400 + hr(i) * 2600 + Math.sin(te * 0.5 + i) * 40 + te * 30, y = -200 + hr(i + 9) * 600 + Math.cos(te * 0.7 + i) * 20;
+      circ(g, x, y, 4 + hr(i + 3) * 6, C(mix(P.och, P.bg, 0.3)));
+    }
+  }, Object.assign({ alpha: 0.7 }, o));
+  // передний план: огромные копья и край щита
+  const fgA = 1 - rng(t, 5.6, 6.6);
+  layer(cam, 430, g => {
+    rect(g, -6000, 540, 12000, 4000, P.ink);
+    circ(g, -1050, 560, 260, P.och); circ(g, -1050, 560, 228, P.red);
+  }, { alpha: fgA });
+  // храм вокруг фриза
+  const tr = E.o5(rng(t, 7.8, 9.3)), pd = E.o5(rng(t, 8.4, 9.5));
+  if (tr > 0) {
+    layer(cam, 1000, g => {
+      const cl = mix(P.bg, P.och, 0.28), cm = mix(P.bg, P.och, 0.5), cd = mix(P.och, P.ink, 0.45), cs = mix(P.bg, P.och, 0.72);
+      g.save();
+      g.strokeStyle = rgb(cd); g.lineWidth = 16; g.strokeRect(BAND.x0, BAND.y0, BAND.x1 - BAND.x0, BAND.y1 - BAND.y0);
+      // ступени
+      const sy = (1 - tr) * 900;
+      rect(g, -1700, 2100 + sy, 5200, 90, cm); rect(g, -1850, 2190 + sy, 5500, 90, cl); rect(g, -2000, 2280 + sy, 5800, 90, cm);
+      // колонны
+      const cols = [-1050, -270, 510, 1290, 2070, 2850];
+      cols.forEach((cx, i) => {
+        const u = E.o5(rng(t, 7.8 + i * 0.07, 9.0 + i * 0.07));
+        const dy = (1 - u) * 1600;
+        columnShape(g, cx, 560 + dy, 2100 + dy, 300, cl, cm, cs);
+      });
+      // нижняя полоса фриза
+      rect(g, BAND.x0 - 100, BAND.y1, BAND.x1 - BAND.x0 + 200, 90 * tr, cl);
+      // архитрав и карниз, фронтон
+      const py = (1 - pd) * -1400;
+      g.globalAlpha = clamp(pd * 3);
+      rect(g, BAND.x0 - 100, BAND.y0 - 130 + py, BAND.x1 - BAND.x0 + 200, 130, cl);
+      for (let k = 0; k < 30; k++) rect(g, BAND.x0 - 60 + k * 152, BAND.y0 - 190 + py, 80, 60, cd);
+      rect(g, BAND.x0 - 260, BAND.y0 - 300 + py, BAND.x1 - BAND.x0 + 520, 110, cm);
+      poly(g, [[BAND.x0 - 300, BAND.y0 - 300 + py], [900, -1250 + py], [BAND.x1 + 300, BAND.y0 - 300 + py]], cl);
+      poly(g, [[BAND.x0 + 60, BAND.y0 - 340 + py], [900, -1140 + py], [BAND.x1 - 60, BAND.y0 - 340 + py]], cm);
+      circ(g, 900, -1290 + py, 70, cd);
+      g.restore();
+    }, { blur: 0 });
+  }
+  // ближние колонны — сильный параллакс при отъезде (глубина привязана к камере)
+  const nearA = rng(t, 7.6, 8.0) * (1 - rng(t, 9.9, 10.2));
+  if (nearA > 0) {
+    const dn = cam.z + 420;
+    layer(cam, dn, g => {
+      const cl = mix(P.bg, P.och, 0.4), cm = mix(P.bg, P.och, 0.62);
+      [1050, 1650].forEach(cx => columnShape(g, cx, -1400, 3000, 210, cl, cm, cm));
+    }, { blur: 12, alpha: nearA });
+  }
+}
+const textsA = [
+  { s: '300', f: 'O7', size: 300, col: P.red, x: 170, y: 330, t0: 0.6, t1: 2.7, fin: 'up', din: 0.75, spread: 0.25 },
+  { s: 'воинов', f: 'Pi', size: 120, col: P.ink, x: 170 + 0, y: 330, t0: 1.2, t1: 2.75, fin: 'slide', din: 0.8 },
+  { s: 'ПРОТИВ', f: 'O4', size: 58, col: P.ink, x: 960, y: 150, al: 'c', track: 0.42, t0: 2.4, t1: 5.45, fin: 'track', din: 0.9, vx: -4 },
+  { s: 'НЕСМЕТНОЙ', f: 'O7', size: 220, col: P.red, x: 960, y: 375, al: 'c', track: 0.0, trackTo: 0.09, t0: 3.0, t1: 5.5, fin: 'track', din: 1.0, vx: -4, fout: 'up' },
+  { s: 'персидской армии', f: 'Pi', size: 86, col: P.ink, x: 960, y: 475, al: 'c', t0: 4.2, t1: 5.6, fin: 'up', vx: -4 },
+  { s: 'ЭТОТ ОБРАЗ,', f: 'O7', size: 140, col: P.ink, x: 960, y: 225, al: 'c', t0: 6.25, t1: 8.3, fin: 'up', vx: 0 },
+  { s: 'застывший в веках', f: 'Pi', size: 100, col: t => stone(P.ink, 0.55 * E.io(rng(t, 7.5, 8.1))), x: 960, y: 345, al: 'c', t0: 7.15, t1: 8.35, fin: 'tilt', din: 0.6, spread: 0.5, fout: 'fade', vx: 0 },
+];
+function layoutA() {
+  const w300 = textW('300', 'O7', 300);
+  textsA[1].x = 170 + w300 + 34;
+  const X = 1150;
+  textsA.push(
+    { s: 'СОЗДАЛ', f: 'O4', size: 66, col: P.ink, x: X, y: 300, t0: 9.15, t1: 10.05, fin: 'up', vx: -6, track: 0.08 },
+    { s: 'СПАРТЕ', f: 'O7', size: 168, col: P.red, x: X, y: 470, t0: 9.3, t1: 10.1, fin: 'scale', din: 0.6, vx: -6 },
+    { s: 'РЕПУТАЦИЮ', f: 'O4', size: 66, col: P.ink, x: X, y: 560, t0: 9.7, t1: 10.15, fin: 'up', vx: -6, track: 0.08 },
+    { s: 'ВЕЛИЧАЙШЕГО', f: 'O7', size: 116, col: P.ink, x: X, y: 400, t0: 10.65, t1: 12.75, fin: 'up', vx: -6 },
+    { s: 'военного государства', f: 'Pi', size: 60, col: P.ink, x: X, y: 490, t0: 11.0, t1: 12.8, fin: 'up', vx: -6 },
+    { s: 'В ИСТОРИИ', f: 'O4', size: 44, col: P.sl, x: X, y: 575, track: 0.35, t0: 11.7, t1: 12.85, fin: 'track', vx: -6 },
+  );
+}
+
+/* =====================================================================
+   СЦЕНА B · 13.2–18.9 · «не люди, а солдаты»
+   ===================================================================== */
+const camB = {
+  x: [[12.9, -420], [16.2, -60], [18.9, 280]],
+  y: [[12.9, 10], [18.9, -30]],
+  z: [[12.9, -80], [16.2, 50], [18.9, 120]],
+  r: [[12.9, 0.025], [16.2, 0.004], [18.9, -0.018]],
+  f: 1000, dof: 9
+};
+const PCOL = [P.sl, P.och, P.ink, mix(P.sl, P.bg, 0.35), mix(P.och, P.ink, 0.3), mix(P.sl, P.och, 0.5)];
+const BROWS = [
+  { d: 1650, n: 17, x0: -1850, dx: 220, mute: 0.45, delay: 0.12, g: 0.25 },
+  { d: 1000, n: 11, x0: -1280, dx: 236, mute: 0.0, delay: 0.0, g: 0.42 },
+  { d: 560, n: 6, x0: -1600, dx: 640, mute: 0.0, delay: -0.06, g: 0.6 }
+].map((R, k) => {
+  R.figs = [];
+  for (let i = 0; i < R.n; i++) {
+    const s = k * 100 + i;
+    R.figs.push({ X: R.x0 + i * R.dx, jit: (hr(s * 1.3) - .5) * 70, h: 140 + hr(s * 2.1) * 80, w: 84 + hr(s * 3.7) * 56, r: 28 + hr(s * 5.3) * 14, col: PCOL[Math.floor(hr(s * 7.9) * PCOL.length)], ph: hr(s * 9.1) * 6 });
+  }
+  return R;
+});
+const morphStart = (R, f) => 16.15 + clamp((f.X + 1850) / 3800) * 0.9 + R.delay;
+function figure(g, f, R, t) {
+  const m = E.io(rng(t, morphStart(R, f), morphStart(R, f) + 0.45));
+  const X = f.X + f.jit * (1 - m), Y = 300;
+  const mute = c => mix(c, P.bg, R.mute);
+  g.save(); g.translate(X, Y); g.rotate(Math.sin(t * 1.7 + f.ph) * 0.035 * (1 - m)); g.translate(-X, -Y);
+  const h = lerp(f.h, 210, m), wB = lerp(f.w, 104, m), wT = lerp(f.w, 156, m), rad = lerp(f.w * 0.46, 10, m);
+  g.fillStyle = rgb(P.ink, 0.12 * (1 - R.mute)); g.beginPath(); g.ellipse(X, Y + 2, wB * 0.75, 12, 0, 0, Math.PI * 2); g.fill();
+  // копьё
+  const ms2 = E.o(rng(m, 0.45, 1));
+  if (ms2 > 0) { line(g, X + 82, Y + 6, X + 82, Y + 6 - 330 * ms2, 7, mute(P.ink)); poly(g, [[X + 72, Y - 314 * ms2], [X + 82, Y - 350 * ms2], [X + 92, Y - 314 * ms2]], mute(P.ink)); }
+  g.fillStyle = rgb(mute(mix(f.col, P.red, m)));
+  if (R.mute < 0.1) shadow(g, 1, 0.9, 0.14);
+  roundPoly(g, [[X - wT / 2, Y - h], [X + wT / 2, Y - h], [X + wB / 2, Y], [X - wB / 2, Y]], [rad, rad, lerp(rad, 4, m), lerp(rad, 4, m)]); g.fill();
+  noShadow(g);
+  const r = lerp(f.r, 40, m), cy = Y - h - r * 0.95;
+  circ(g, X, cy, r, mute(mix(mix(f.col, P.ink, 0.28), P.och, m)));
+  if (m > 0) {
+    g.fillStyle = rgb(mute(P.ink)); g.beginPath(); g.ellipse(X - 6, cy - r * 0.92, r * 1.35 * m, r * 0.55 * m, 0, Math.PI, Math.PI * 2); g.fill();
+    g.globalAlpha = m; rect(g, X - 4, cy - 4, 9, r * 0.9, mute(P.ink)); rect(g, X - r * 0.6, cy - 9, r * 1.2, 10, mute(P.ink)); g.globalAlpha = 1;
+  }
+  const ms = E.ob(rng(m, 0.3, 1));
+  if (ms > 0) {
+    const sx = X + 6, sy = Y - h * 0.52, sr = 76 * ms;
+    if (R.mute < 0.1) shadow(g, 1, 0.7, 0.16);
+    circ(g, sx, sy, sr, mute(P.och)); noShadow(g);
+    circ(g, sx, sy, sr * 0.8, mute(mix(P.och, P.red, 0.25)));
+    g.strokeStyle = rgb(mute(P.ink)); g.lineWidth = 11 * ms; g.lineJoin = 'round'; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(sx - 26 * ms, sy + 30 * ms); g.lineTo(sx, sy - 34 * ms); g.lineTo(sx + 26 * ms, sy + 30 * ms); g.stroke();
+  }
+  g.restore();
+}
+function sceneB(t, cam) {
+  G.setTransform(1, 0, 0, 1, 0, 0); G.fillStyle = rgb(P.bg); G.fillRect(0, 0, W, H);
+  layer(cam, 5000, g => circ(g, -2600, -1900, 1300, mix(P.bg, P.och, 0.42)));
+  layer(cam, 3200, g => poly(g, [[-9000, 300], [-5600, -500], [-3000, 0], [-200, -700], [2600, -120], [5200, -820], [9000, 300]], mix(P.bg, P.sl, 0.22)));
+  for (const R of BROWS) layer(cam, R.d, g => {
+    rect(g, -30000, 300, 60000, 20000, mix(P.bg, P.och, R.g));
+    for (const f of R.figs) figure(g, f, R, t);
+  });
+}
+const textsB = [];
+function layoutB() {
+  textsB.push(...row([
+    { s: 'ГОСУДАРСТВА,', f: 'O7', size: 150, col: P.ink, t0: 13.45, t1: 14.6, fin: 'up' },
+    { s: 'где рождались', f: 'Pi', size: 90, col: P.ink, t0: 14.0, t1: 14.65, fin: 'slide' }
+  ], 150, 270, 'l', 0.3));
+  textsB.push(
+    { s: 'не люди,', f: 'Pi', size: 140, col: P.ink, x: 150, y: 250, t0: 15.1, t1: 18.1, fin: 'up', strike: { t: 15.75, col: P.ink }, dim: { t: 16.1, a: 0.4 } },
+    { s: 'А СОЛДАТЫ.', f: 'O7', size: 230, col: P.red, x: 150, y: 480, t0: 16.15, t1: 18.15, fin: 'up', din: 0.6, spread: 0.3 }
+  );
+}
+
+/* =====================================================================
+   СЦЕНА C · 18.6–26.4 · идеальная сетка → эксперимент → уроборос
+   ===================================================================== */
+const camC = {
+  x: [[18.6, -40], [21.4, 20], [23.6, 80], [25.3, 380], [26.4, 560]],
+  y: [[18.6, 20], [23.6, 0], [26.4, 0]],
+  z: [[18.6, -120], [21.4, 0], [23.6, -40], [25.3, 80], [26.4, 432]],
+  r: [[18.6, -0.04], [21.4, 0.02], [23.6, -0.01], [25.3, 0.03], [26.4, 0]],
+  f: 1000, dof: 9
+};
+const GX = 560, GY = 0, GSP = 82, GC = 10, GR = 9, SNSP = 30;
+const DOTS = [];
+for (let r = 0; r < GR; r++) for (let c = 0; c < GC; c++) {
+  const i = DOTS.length;
+  DOTS.push({ x: GX + (c - (GC - 1) / 2) * GSP, y: GY + (r - (GR - 1) / 2) * GSP, cull: hr(i * 7.3 + 1) < 0.24 && !(r === 4 && c === 5) });
+}
+const CULLED = DOTS.filter(d => d.cull); CULLED.forEach((d, k) => d.ck = k);
+const SURV = DOTS.filter(d => !d.cull).sort((a, b) => Math.atan2(b.y - GY, b.x - GX) - Math.atan2(a.y - GY, a.x - GX));
+SURV.forEach((d, j) => d.j = j);
+const NS = SURV.length;
+function headAng(t) { const u = Math.max(0, t - 23.6); return -0.4 + u * 1.1 + u * u * 0.25; }
+function snakeN(t) { return lerp(NS, 1, E.s(rng(t, 24.75, 26.25))); }
+function topSoldier(g, x, y, sc, ang, head, ink) {
+  g.save(); g.translate(x, y); g.rotate(ang);
+  if (!head) {
+    circ(g, 7 * sc, 7 * sc, 30 * sc, P.och); circ(g, 0, 0, 24 * sc, P.red);
+    rect(g, -17 * sc, -3.5 * sc, 34 * sc, 7 * sc, P.ink);
+  } else {
+    circ(g, 0, 0, 24 * sc, mix(P.red, P.ink, ink));
+    circ(g, 9 * sc, -8 * sc, 4.5 * sc * (1 - ink), P.bg);
+  }
+  g.restore();
+}
+function sceneC(t, cam) {
+  G.setTransform(1, 0, 0, 1, 0, 0); G.fillStyle = rgb(P.bg); G.fillRect(0, 0, W, H);
+  const lab = E.io(rng(t, 21.45, 22.4)) * (1 - E.io(rng(t, 23.4, 23.9)));
+  const out = 1 - rng(t, 25.6, 26.2);
+  layer(cam, 2600, g => { circ(g, 650, -60, 1150, mix(P.bg, P.och, 0.22)); circ(g, 650, -60, 760, mix(P.bg, P.och, 0.3)); }, { alpha: out });
+  layer(cam, 1500, g => {
+    g.strokeStyle = rgb(P.sl, 0.2); g.lineWidth = 3; g.beginPath();
+    for (let k = -14; k <= 16; k++) { g.moveTo(GX + k * 138, -2400); g.lineTo(GX + k * 138, 2400); g.moveTo(-3000, GY + k * 138); g.lineTo(3800, GY + k * 138); }
+    g.stroke();
+  }, { alpha: out });
+  layer(cam, 1000, g => {
+    // лабораторная разметка
+    if (lab > 0) {
+      const x0 = GX - GC * GSP / 2, y0 = GY - GR * GSP / 2, x1 = GX + GC * GSP / 2, y1 = GY + GR * GSP / 2;
+      g.save(); g.globalAlpha = 1;
+      const Lx = (x1 - x0) * lab, Ly = (y1 - y0) * lab;
+      line(g, x0, y0 - 50, x0 + Lx, y0 - 50, 4, P.sl, 'butt'); line(g, x0 - 50, y0, x0 - 50, y0 + Ly, 4, P.sl, 'butt');
+      for (let c = 0; c <= GC; c++) if (x0 + c * GSP <= x0 + Lx + 1) line(g, x0 + c * GSP, y0 - 50, x0 + c * GSP, y0 - (c % 5 ? 66 : 82), 4, P.sl, 'butt');
+      for (let r = 0; r <= GR; r++) if (y0 + r * GSP <= y0 + Ly + 1) line(g, x0 - 50, y0 + r * GSP, x0 - (r % 5 ? 66 : 82), y0 + r * GSP, 4, P.sl, 'butt');
+      for (const [cx, cy] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]) {
+        const L = 34 * lab; line(g, cx - L, cy, cx + L, cy, 4, P.ink, 'butt'); line(g, cx, cy - L, cx, cy + L, 4, P.ink, 'butt');
+        g.strokeStyle = rgb(P.ink); g.lineWidth = 3; g.beginPath(); g.arc(cx, cy, 16 * lab, 0, Math.PI * 2); g.stroke();
+      }
+      g.restore();
+    }
+    const nr = snakeN(t), R = (nr - 1) * SNSP / (2 * Math.PI), th = headAng(t), dth = 2 * Math.PI / Math.max(nr, 1.0001);
+    for (const d of CULLED) {
+      const xs = E.o(rng(t, 22.05 + d.ck * 0.045, 22.3 + d.ck * 0.045));
+      const k = 1 - E.i(rng(t, 22.55 + d.ck * 0.045, 22.95 + d.ck * 0.045));
+      if (k > 0) topSoldier(g, d.x, d.y, k, -Math.PI / 2, false, 0);
+      if (xs > 0 && k > 0) { const L = 30 * xs; g.globalAlpha = k; line(g, d.x - L, d.y - L, d.x + L, d.y + L, 7, P.ink); line(g, d.x - L, d.y + L, d.x + L, d.y - L, 7, P.ink); g.globalAlpha = 1; }
+    }
+    // уроборос: сначала тело, потом голова поверх
+    const order = SURV.slice().sort((a, b) => b.j - a.j);
+    for (const d of order) {
+      const u = E.io(rng(t, 23.45 + d.j * 0.008, 23.95 + d.j * 0.008));
+      const a = th - d.j * dth;
+      const rx = GX + R * Math.cos(a), ry = GY + R * Math.sin(a);
+      const vis = d.j === 0 ? 1 : clamp(nr - d.j);
+      if (vis <= 0) continue;
+      const x = lerp(d.x, rx, u), y = lerp(d.y, ry, u);
+      const ang = lerp(-Math.PI / 2, a + Math.PI, u);
+      const head = d.j === 0 && t > 24.3;
+      const sc = d.j === 0 ? lerp(1, 1.4, E.io(rng(t, 24.2, 24.7))) : lerp(1, 0.66, u) * vis;
+      const ink = d.j === 0 ? E.io(rng(t, 25.5, 26.25)) : 0;
+      topSoldier(g, x, y, sc, ang, head, ink);
+    }
+  });
+  layer(cam, 640, g => {
+    for (let i = 0; i < 9; i++) {
+      const x = -900 + hr(i * 2.2) * 2600, y = -700 + hr(i * 4.1) * 1400, L = 30 + hr(i) * 30;
+      line(g, x - L, y, x + L, y, 8, P.sl); line(g, x, y - L, x, y + L, 8, P.sl);
+    }
+  }, { alpha: 0.55 * out * rng(t, 19.0, 19.8) });
+}
+const textsC = [];
+function layoutC() {
+  textsC.push(...row([
+    { s: 'НО БЫЛА ЛИ', f: 'O4', size: 74, col: P.ink, t0: 18.85, t1: 21.2, fin: 'up', track: 0.05 },
+    { s: 'СПАРТА', f: 'O7', size: 74, col: P.ink, t0: 19.05, t1: 21.2, fin: 'up', track: 0.05 }
+  ], 140, 250, 'l', 0.3));
+  textsC.push(
+    { s: 'ИДЕАЛЬНЫМ', f: 'O7', size: 150, col: P.red, x: 140, y: 435, t0: 19.6, t1: 21.25, fin: 'track', din: 0.8 },
+    { s: 'обществом воинов,', f: 'Pi', size: 74, col: P.ink, x: 140, y: 535, t0: 20.0, t1: 21.3, fin: 'up' },
+    { s: 'или же', f: 'Pi', size: 80, col: P.ink, x: 140, y: 250, t0: 21.4, t1: 23.45, fin: 'up' },
+    { s: 'ЖЕСТОКИЙ', f: 'O7', size: 160, col: P.red, x: 140, y: 440, t0: 21.95, t1: 23.5, fin: 'up', din: 0.55, spread: 0.2 },
+    { s: 'социальный эксперимент,', f: 'Pi', size: 62, col: P.ink, x: 140, y: 535, t0: 22.4, t1: 23.55, fin: 'up' },
+    { s: 'КОТОРЫЙ В ИТОГЕ', f: 'O4', size: 66, col: P.ink, x: 140, y: 290, track: 0.06, t0: 23.75, t1: 25.85, fin: 'up' },
+    { s: 'СЪЕЛ САМ', f: 'O7', size: 172, col: P.ink, x: 140, y: 480, t0: 24.5, t1: 25.9, fin: 'up', din: 0.6 },
+    { s: 'СЕБЯ?', f: 'O7', size: 172, col: P.red, x: 140, y: 660, t0: 24.85, t1: 25.95, fin: 'up', din: 0.6 }
+  );
+}
+
+/* =====================================================================
+   СЦЕНА D · 26.4–41.4 · законы → машина → крушение → «одно»
+   ===================================================================== */
+const camD = {
+  x: [[26.4, 0], [27.6, 220], [29.0, 900], [32.4, 1250], [34.2, 1300], [36.6, 1250], [38.8, 1200], [41.4, 1185]],
+  y: [[26.4, 0], [27.6, 80], [29.0, 0], [32.4, 60], [34.2, 60], [35.4, -90], [36.6, -150], [38.8, -190], [41.4, -205]],
+  z: [[26.4, 432], [27.6, 150], [29.0, -700], [32.4, -900], [34.2, -1000], [36.6, -900], [38.8, -720], [41.4, -650]],
+  r: [[26.4, 0], [27.6, -0.012], [29.0, -0.05], [32.4, -0.07], [34.2, -0.06], [36.6, -0.02], [38.8, 0.0], [41.4, 0.008]],
+  f: 1000, dof: 8
+};
+const GROUND = 420, TJAM = 34.2;
+const GEARS = [
+  { id: 1, d: 1000, cx: 1500, cy: 40, R: 330, n: 14, col: P.red, helm: true, tb: 34.55, k: 1, ph: 0, t0: 27.55 },
+  { id: 2, d: 1000, cx: 1500 + 505 * Math.cos(-0.75), cy: 40 + 505 * Math.sin(-0.75), R: 200, n: 9, col: P.och, tb: 34.4, k: -330 / 200, ph: 0.2, t0: 27.75 },
+  { id: 3, d: 1700, cx: 2350, cy: -260, R: 720, n: 26, col: mix(P.sl, P.bg, 0.2), tb: 34.8, k: 0.28, ph: 0, t0: 27.6 },
+  { id: 4, d: 560, cx: 650, cy: 930, R: 430, n: 16, col: P.ink, tb: 34.65, k: -0.62, ph: 0, t0: 27.9, noGround: true }
+];
+function gearSpeed(t) { return 1.75 * E.s(rng(t, 27.85, 29.4)); }
+const ANG_TAB = (() => { const a = [0]; let acc = 0, dt = 1 / 600; for (let i = 1; i <= (TJAM - 26.4) * 600 + 2; i++) { const tt = 26.4 + i * dt; acc += gearSpeed(tt) * dt; a.push(acc); } return a; })();
+function gearAng(t) {
+  if (t <= TJAM) { const i = clamp((t - 26.4) * 600, 0, ANG_TAB.length - 1); const i0 = Math.floor(i); return lerp(ANG_TAB[i0], ANG_TAB[Math.min(i0 + 1, ANG_TAB.length - 1)], i - i0); }
+  const a0 = gearAng(TJAM), w0 = gearSpeed(TJAM), u = t - TJAM;
+  return a0 + w0 * (1 - Math.exp(-14 * u)) / 14 - 0.06 * Math.sin(38 * u) * Math.exp(-6 * u);
+}
+function gearPath(g, R, n, a0, a1, helm) {
+  // контур: дуга с зубьями между углами a0..a1 (+центр, если сектор)
+  const full = a1 - a0 >= Math.PI * 2 - 1e-6;
+  const tw = (Math.PI * 2 / n) * 0.42, th = R * 0.16;
+  g.beginPath();
+  if (!full) g.moveTo(0, 0);
+  const steps = Math.max(2, Math.ceil((a1 - a0) / (Math.PI * 2) * n * 4));
+  let first = true;
+  for (let s = 0; s <= steps; s++) {
+    const a = a0 + (a1 - a0) * s / steps;
+    const ph = ((a / (Math.PI * 2 / n)) % 1 + 1) % 1;
+    const r = (ph > 0.29 && ph < 0.71) ? R + th : R;
+    const x = Math.cos(a) * r, y = Math.sin(a) * r;
+    if (first && full) { g.moveTo(x, y); first = false; } else g.lineTo(x, y);
+  }
+  g.closePath();
+}
+function drawGear(g, Gr, ang, a0 = 0, a1 = Math.PI * 2) {
+  const { R, n, col } = Gr;
+  const sp = Math.PI * 2 / n;
+  g.save(); g.rotate(ang);
+  g.fillStyle = rgb(col); gearPath(g, R, n, a0, a1); g.fill();
+  noShadow(g);
+  g.save(); gearPath(g, R, n, a0, a1); g.clip();
+  circ(g, 0, 0, R * 0.62, mix(col, P.ink, 0.22));
+  circ(g, 0, 0, R * 0.5, col);
+  for (let k = 0; k < 5; k++) { const a = k * Math.PI * 2 / 5 + 0.3; circ(g, Math.cos(a) * R * 0.3, Math.sin(a) * R * 0.3, R * 0.1, mix(col, P.bg, 0.45)); }
+  circ(g, 0, 0, R * 0.12, P.bg); circ(g, 0, 0, R * 0.05, P.ink);
+  g.restore();
+  if (Gr.helm) { // зубья-люди: шлемы с гребнями
+    for (let k = 0; k < n; k++) {
+      const a = (k + 0.5) * sp; if (a < a0 || a > a1) continue;
+      g.save(); g.rotate(a); g.translate(R + R * 0.16, 0);
+      g.fillStyle = rgb(P.ink); g.beginPath(); g.ellipse(4, 0, 10, 26, 0, -Math.PI / 2, Math.PI / 2); g.fill();
+      circ(g, -16, 0, 14, P.och);
+      g.restore();
+    }
+  }
+  g.restore();
+}
+/* Обломки: детерминированная симуляция с отскоками */
+const FRAGS = [];
+GEARS.forEach(Gr => {
+  for (let k = 0; k < 6; k++) {
+    const s = Gr.id * 10 + k, a0 = k * Math.PI / 3, a1 = a0 + Math.PI / 3;
+    FRAGS.push({ G: Gr, a0, a1, mid: (a0 + a1) / 2, cr: Gr.R * 0.6, vx: (hr(s * 1.7) - 0.4) * 900, vy: -300 - hr(s * 2.3) * 700, w: (hr(s * 3.1) - 0.5) * 7 });
+  }
+});
+FRAGS.push({ tooth: true, G: GEARS[0], a0: 0, a1: 0, mid: 0, cr: 0, vx: 900, vy: -1400, w: 9 }); // сломанный зуб
+function fragState(f, t) {
+  const Gr = f.G, tb = f.tooth ? TJAM : Gr.tb;
+  const angB = gearAng(tb) * Gr.k + Gr.ph;
+  const dirA = angB + f.mid;
+  let x = Gr.cx + Math.cos(dirA) * f.cr, y = Gr.cy + Math.sin(dirA) * f.cr, rot = angB;
+  if (f.tooth) { const a = angB + Math.PI * 2 / Gr.n * 0.5 + 4 * (Math.PI * 2 / Gr.n); x = Gr.cx + Math.cos(a) * (Gr.R + 40); y = Gr.cy + Math.sin(a) * (Gr.R + 40); rot = a; }
+  if (t <= tb) return { x, y, rot, live: false };
+  let vx = f.vx, vy = f.vy, w = f.w; const dt = 1 / 240; let tt = tb;
+  const half = f.tooth ? 20 : Gr.R * 0.32;
+  while (tt < t) {
+    const h = Math.min(dt, t - tt);
+    vy += 3600 * h; x += vx * h; y += vy * h; rot += w * h; tt += h;
+    if (!Gr.noGround && !f.tooth && y + half > GROUND + 40 && vy > 0) { y = GROUND + 40 - half; vy = -vy * 0.28; vx *= 0.55; w *= 0.45; if (Math.abs(vy) < 120) vy = 0; }
+    if (f.tooth && y > GROUND - 10 && vy > 0) { y = GROUND - 10; vy = -vy * 0.3; vx *= 0.5; w *= 0.4; if (Math.abs(vy) < 100) vy = 0; }
+  }
+  return { x, y, rot, live: true };
+}
+function shake(t) {
+  const a = 18 * Math.exp(-Math.max(0, t - TJAM) * 4) * (t > TJAM ? 1 : 0) + 10 * Math.exp(-Math.max(0, t - 36.6) * 6) * (t > 36.6 ? 1 : 0);
+  return [Math.sin(t * 71) * a + Math.sin(t * 43) * a * 0.5, Math.cos(t * 63) * a * 0.7];
+}
+function legislator(g, t) {
+  const grow = E.o5(rng(t, 26.4, 27.1));
+  const fall = t > 34.6 ? E.i2(rng(t, 34.6, 35.15)) : 0;
+  const bounce = t > 35.15 ? Math.sin((t - 35.15) * 20) * 0.05 * Math.exp(-(t - 35.15) * 6) : 0;
+  const gone = rng(t, 35.3, 36.1); if (gone >= 1) return 0;
+  g.save(); g.globalAlpha = 1 - E.s(gone); g.translate(0, GROUND); g.rotate((Math.PI / 2 - 0.04) * fall - bounce); g.translate(0, -GROUND);
+  g.fillStyle = rgb(P.ink, 0.13); g.beginPath(); g.ellipse(0, GROUND + 2, 120 * grow, 14, 0, 0, Math.PI * 2); g.fill();
+  g.save(); g.translate(0, 34); g.scale(1, grow); g.translate(0, -34);
+  shadow(g, 1, 0.9, 0.15);
+  poly(g, [[-40, 40], [40, 40], [95, GROUND], [-95, GROUND]], P.ink); noShadow(g);
+  poly(g, [[-40, 70], [-22, 40], [80, GROUND - 40], [58, GROUND]], mix(P.ink, P.sl, 0.45));
+  g.restore();
+  circ(g, 0, 0, 33.6, P.ink);
+  // свиток
+  const L = 880 * E.io(rng(t, 26.85, 27.85)) * (1 - E.i(rng(t, 34.25, 34.6)));
+  if (grow > 0.3) {
+    g.globalAlpha = clamp((grow - 0.3) * 3) * (1 - E.s(gone));
+    line(g, 24, 90, 100, 150, 24, P.ink);
+    if (L > 4) {
+      rect(g, 100, 110, L, 120, mix(P.bg, P.och, 0.28));
+      for (let r = 0; r < 4; r++) { let x = 120; let k = 0; while (x < 100 + L - 30) { const w = 30 + hr(r * 31 + k) * 70; line(g, x, 136 + r * 24, Math.min(x + w, 100 + L - 24), 136 + r * 24, 7, P.ink, 'butt'); x += w + 16; k++; } }
+    }
+    rect(g, 86, 98, 28, 144, P.och); rect(g, 86 + L, 98, 28, 144, P.och);
+    g.globalAlpha = 1 - E.s(gone);
+  }
+  g.restore();
+  return L;
+}
+function sceneD(t, cam0) {
+  const [sx, sy] = shake(t); const cam = Object.assign({}, cam0, { x: cam0.x + sx, y: cam0.y + sy });
+  G.setTransform(1, 0, 0, 1, 0, 0); G.fillStyle = rgb(P.bg); G.fillRect(0, 0, W, H);
+  const A = gearAng(t);
+  const show = Gr => E.ob(rng(t, Gr.t0, Gr.t0 + 0.7));
+  const drawGearAt = (g, Gr) => {
+    if (t >= Gr.tb) return;
+    const sc = show(Gr); if (sc <= 0) return;
+    g.save(); g.translate(Gr.cx, Gr.cy); g.scale(sc, sc);
+    const wob = t > TJAM ? Math.sin((t - TJAM) * 45) * 6 * Math.exp(-(t - TJAM) * 5) : 0;
+    g.translate(wob, 0);
+    shadow(g, 1, 1.2, 0.16); drawGear(g, Gr, A * Gr.k + Gr.ph); g.restore();
+  };
+  const drawFrags = (g, Gr) => {
+    for (const f of FRAGS) if (f.G === Gr && !f.tooth) {
+      const st = fragState(f, t); if (!st.live) continue;
+      g.save(); g.translate(st.x, st.y); g.rotate(st.rot - (gearAng(Gr.tb) * Gr.k + Gr.ph));
+      g.translate(-Math.cos(gearAng(Gr.tb) * Gr.k + Gr.ph + f.mid) * f.cr, -Math.sin(gearAng(Gr.tb) * Gr.k + Gr.ph + f.mid) * f.cr);
+      shadow(g, 1, 0.8, 0.14); drawGear(g, Gr, gearAng(Gr.tb) * Gr.k + Gr.ph, f.a0, f.a1); g.restore();
+    }
+  };
+  const bgIn = E.o(rng(t, 26.4, 26.85));
+  layer(cam, 4200, g => circ(g, 2600, -1900, 1300, mix(P.bg, P.och, 0.45)), { alpha: bgIn });
+  layer(cam, 2600, g => poly(g, [[-6000, GROUND], [-3000, -300], [-500, 150], [2200, -650], [4800, 50], [7600, -500], [11000, GROUND]], mix(P.bg, P.sl, 0.2)), { alpha: bgIn });
+  const G3 = GEARS[2];
+  layer(cam, 1700, g => { g.globalAlpha = bgIn; rect(g, -30000, GROUND, 60000, 20000, mix(P.bg, P.och, 0.28)); g.globalAlpha = 1; drawGearAt(g, G3); drawFrags(g, G3); });
+  layer(cam, 1000, g => {
+    g.globalAlpha = bgIn; rect(g, -30000, GROUND, 60000, 20000, mix(P.bg, P.och, 0.48)); g.globalAlpha = 1;
+    const L = legislator(g, t);
+    // ремни: строки закона тянут шестерню
+    const bl = E.io(rng(t, 27.55, 28.25)) * (1 - E.i(rng(t, TJAM + 0.05, TJAM + 0.35)));
+    if (bl > 0 && L > 300) {
+      g.save(); g.setLineDash([46, 22]); g.lineDashOffset = -A * 330;
+      for (let k = 0; k < 3; k++) {
+        const x1 = 114 + L, y1 = 140 + k * 30, x2 = 1500 - 330 * 0.9, y2 = 40 - 60 + k * 60;
+        line(g, x1, y1, lerp(x1, x2, bl), lerp(y1, y2, bl), 7, P.ink, 'butt');
+      }
+      g.restore();
+    }
+    drawGearAt(g, GEARS[1]); drawGearAt(g, GEARS[0]);
+    drawFrags(g, GEARS[1]); drawFrags(g, GEARS[0]);
+    for (const f of FRAGS) if (f.tooth) { const st = fragState(f, t); if (!st.live) continue; g.save(); g.translate(st.x, st.y); g.rotate(st.rot); rect(g, -26, -22, 52, 44, P.red); g.fillStyle = rgb(P.ink); g.beginPath(); g.ellipse(26, 0, 10, 22, 0, -Math.PI / 2, Math.PI / 2); g.fill(); g.restore(); }
+    // финальный щит: катится и ложится
+    if (t > 37.9) {
+      const xEnd = 700, u = E.o(rng(t, 37.9, 38.95)), x = lerp(xEnd + 1700, xEnd, u), Rs = 96;
+      const fall = E.i2(rng(t, 38.95, 39.55));
+      const tw = t > 39.55 ? (t - 39.55) : 0;
+      const wob = t > 39.55 ? Math.sin(tw * (14 + tw * 30)) * 0.12 * Math.exp(-tw * 2.4) : 0;
+      const phi = (Math.PI / 2 - 0.22) * fall + Math.abs(wob) * fall;
+      const cy = phi > 0.01 ? GROUND - Rs * Math.cos(phi) - 6 * Math.sin(phi) + 10 : GROUND - Rs;
+      g.fillStyle = rgb(P.ink, 0.15); g.beginPath(); g.ellipse(x + 20, GROUND + 4, Rs * 1.15, 14, 0, 0, Math.PI * 2); g.fill();
+      g.save(); g.translate(x, cy); g.scale(1 + wob * 0.2, Math.max(0.06, Math.cos(phi)));
+      g.rotate(-(x - xEnd) / Rs * (1 - fall));
+      shadow(g, 1, 0.8, 0.16); circ(g, 0, 0, Rs, P.och); noShadow(g); circ(g, 0, 0, Rs * 0.84, P.red);
+      g.strokeStyle = rgb(P.ink); g.lineWidth = 14; g.lineJoin = 'round'; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(-32, 36); g.lineTo(0, -42); g.lineTo(32, 36); g.stroke();
+      g.restore();
+    }
+  });
+  const G4 = GEARS[3];
+  layer(cam, 560, g => { drawGearAt(g, G4); drawFrags(g, G4); });
+}
+const textsD = [];
+function layoutD() {
+  textsD.push(...row([
+    { s: 'КАК', f: 'O7', size: 150, col: P.ink, t0: 26.6, t1: 28.5, fin: 'up' },
+    { s: 'ЗАКОНЫ', f: 'O7', size: 150, col: P.red, t0: 26.75, t1: 28.55, fin: 'up' }
+  ], 130, 250, 'l', 0.22));
+  textsD.push(
+    { s: 'одного человека', f: 'Pi', size: 92, col: P.ink, x: 130, y: 370, t0: 27.3, t1: 28.6, fin: 'slide' },
+    { s: 'ПРЕВРАТИЛИ', f: 'O4', size: 72, col: P.ink, x: 130, y: 230, track: 0.06, t0: 28.75, t1: 30.15, fin: 'up' },
+    { s: 'ЦЕЛЫЙ НАРОД', f: 'O7', size: 140, col: P.ink, x: 130, y: 385, t0: 29.05, t1: 30.2, fin: 'up' },
+    { s: 'в военную', f: 'Pi', size: 86, col: P.ink, x: 130, y: 250, t0: 30.25, t1: 32.1, fin: 'up' },
+    { s: 'МАШИНУ,', f: 'O7', size: 210, col: P.red, x: 130, y: 460, t0: 30.55, t1: 32.15, fin: 'scale', din: 0.6 },
+    { s: 'И ПОЧЕМУ ЭТА МАШИНА', f: 'O4', size: 74, col: P.ink, x: 130, y: 230, track: 0.04, t0: 32.55, t1: 34.25, fin: 'up', fout: 'fall' },
+    { s: 'в итоге', f: 'Pi', size: 84, col: P.ink, x: 130, y: 345, t0: 33.4, t1: 34.35, fin: 'up', fout: 'fall' },
+    { s: 'РАЗВАЛИЛАСЬ,', f: 'O7', size: 176, col: P.ink, x: 130, y: 540, t0: 33.65, t1: 34.5, fin: 'up', din: 0.5, spread: 0.25, fout: 'fall' },
+    { s: 'ПРОИГРАВ ВСЕГО', f: 'O4', size: 74, col: P.ink, x: 140, y: 250, al: 'l', track: 0.18, t0: 35.4, t1: 37.75, fin: 'track', vx: 0 },
+    { s: 'ОДНО,', f: 'P9', size: 360, col: P.red, x: 140, y: 590, al: 'l', t0: 36.6, t1: 99, din: 0.55, fin: 'impact', vx: 0, shake, move: { t0: 37.7, t1: 38.3, x: 140, y: 300, sc: 0.55 } },
+    { s: 'но решающее', f: 'Pi', size: 92, col: P.ink, x: 140, y: 450, al: 'l', t0: 38.0, t1: 99, fin: 'up', vx: 0 },
+    { s: 'СРАЖЕНИЕ?', f: 'O7', size: 200, col: P.ink, x: 140, y: 660, al: 'l', t0: 38.75, t1: 99, fin: 'up', din: 0.6, vx: 0 }
+  );
+}
+/* последние 0.45 с — читаемый финальный кадр без исчезновения: тексты держатся до конца */
+
+/* =====================================================================
+   МОНТАЖ
+   ===================================================================== */
+function wipeColumnX(t) { return lerp(W + 120, -2500, E.io(rng(t, 12.95, 13.6))); }
+function drawWipeColumn(g, x) {
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  const w = 2380, cl = mix(P.bg, P.och, 0.4), cm = mix(P.bg, P.och, 0.6);
+  g.save(); g.shadowColor = rgb(P.ink, 0.25); g.shadowBlur = 60; g.shadowOffsetX = 0;
+  rect(g, x, 0, w, H, cl); g.restore();
+  for (let k = 1; k < 9; k++) rect(g, x + k * w / 9 - 14, 0, 28, H, cm);
+}
+function renderScene(id, t, ctx) {
+  const prev = G; G = ctx;
+  if (id === 'A') { const cam = camOf(camA, t); sceneA(t, cam); textsA.forEach(it => drawText(it, t, cam)); }
+  if (id === 'B') { const cam = camOf(camB, t); sceneB(t, cam); textsB.forEach(it => drawText(it, t, cam)); }
+  if (id === 'C') { const cam = camOf(camC, t); sceneC(t, cam); textsC.forEach(it => drawText(it, t, cam)); }
+  if (id === 'D') { const cam = camOf(camD, t); sceneD(t, cam); textsD.forEach(it => drawText(it, t, cam)); }
+  G = prev;
+}
+function renderFrameTo(t) {
+  fr.setTransform(1, 0, 0, 1, 0, 0);
+  if (t < 12.95) { renderScene('A', t, fr); return; }
+  if (t < 13.6) { // шторка-колонна: A слева от колонны, B — справа
+    const x = wipeColumnX(t);
+    renderScene('B', t, s2); renderScene('A', t, s1);
+    fr.drawImage(s2C, 0, 0);
+    fr.save(); fr.beginPath(); fr.rect(0, 0, Math.max(0, x), H); fr.clip(); fr.drawImage(s1C, 0, 0); fr.restore();
+    drawWipeColumn(fr, x); return;
+  }
+  if (t < 18.3) { renderScene('B', t, fr); return; }
+  if (t < 18.95) { // «камера поднимается»: строй складывается в план сверху
+    fr.fillStyle = rgb(P.bg); fr.fillRect(0, 0, W, H);
+    if (t < 18.6) {
+      renderScene('B', t, s1); const k = 1 - E.i(rng(t, 18.3, 18.6)); fr.save(); fr.translate(0, 840); fr.scale(1, Math.max(0.002, k)); fr.translate(0, -840 - (1 - k) * 260); fr.drawImage(s1C, 0, 0); fr.restore();
+    } else {
+      renderScene('C', t, s1); const k = E.o(rng(t, 18.6, 18.95)); fr.save(); fr.translate(0, 700); fr.scale(1, Math.max(0.002, k)); fr.translate(0, -700); fr.drawImage(s1C, 0, 0); fr.restore();
+    }
+    return;
+  }
+  if (t < 26.4) { renderScene('C', t, fr); return; }
+  renderScene('D', t, fr);
+}
+function renderAt(t) {
+  main.setTransform(1, 0, 0, 1, 0, 0);
+  for (let k = 0; k < SUB; k++) {
+    const ts = Math.min(DUR - 1e-4, t + (k / SUB) * (SHUTTER / FPS));
+    renderFrameTo(ts);
+    main.globalAlpha = 1 / (k + 1); main.drawImage(frC, 0, 0);
+  }
+  main.globalAlpha = 1;
+}
+/* События для звукового дизайна — из тех же формул, что и анимация */
+function soundEvents() {
+  const ev = [];
+  for (const R of BROWS) if (R.d === 1000) for (const f of R.figs) ev.push({ k: 'clang', t: morphStart(R, f) + 0.3 });
+  CULLED.forEach(d => ev.push({ k: 'tick', t: 22.05 + d.ck * 0.045 }));
+  GEARS.forEach(g => ev.push({ k: 'break', t: g.tb, size: g.R }));
+  return ev;
+}
+
+let ready = false;
+async function init() {
+  await Promise.all([FONTS.O7(100), FONTS.O4(100), FONTS.P9(100), FONTS.Pi(100)].map(f => document.fonts.load(f, 'АБВабв300?')));
+  await document.fonts.ready;
+  REF = camOf(camA, 7.35);
+  layoutA(); layoutB(); layoutC(); layoutD();
+  ready = true; renderAt(0);
+}
+window.renderAt = renderAt; window.soundEvents = soundEvents; window.isReady = () => ready; window.DUR = DUR;
+init();
+
+/* ---------- превью ---------- */
+if (/export/.test(location.search)) document.body.classList.add('export');
+const au = document.getElementById('au'), sc = document.getElementById('sc'), tm = document.getElementById('tm');
+let playing = false, t0 = 0, st = 0;
+function tick() {
+  if (!playing) return;
+  let t = au.readyState >= 2 && !au.paused ? au.currentTime : st + (performance.now() - t0) / 1000;
+  if (t >= DUR) { playing = false; au.pause(); t = DUR - 1 / FPS; }
+  renderAt(t); sc.value = t; tm.textContent = t.toFixed(2);
+  requestAnimationFrame(tick);
+}
+document.getElementById('pp').onclick = () => {
+  playing = !playing;
+  if (playing) { st = +sc.value; t0 = performance.now(); au.currentTime = st; au.play().catch(() => {}); tick(); } else au.pause();
+};
+sc.oninput = () => { if (ready) { renderAt(+sc.value); tm.textContent = (+sc.value).toFixed(2); au.currentTime = +sc.value; } };
+</script>
+</body>
+</html>
