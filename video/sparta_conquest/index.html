@@ -512,9 +512,9 @@ function sceneM(t, cam) {
 const textsM = [];
 function layoutM() {
   textsM.push(
-    { s: 'XII век', f: 'P9', size: 170, col: P.ink, x: 1230, y: 300, t0: 6.35, t1: 10.2, fin: 'up', din: 0.6, noShadow: true },
-    { s: 'до н. э.', f: 'Pi', size: 84, col: P.ink, x: 1240, y: 400, t0: 6.85, t1: 10.25, fin: 'slide', noShadow: true },
-    { s: 'ДОРИЙЦЫ', f: 'O7', size: 150, col: P.terra, x: 1230, y: 610, t0: 7.7, t1: 10.3, fin: 'track', din: 0.8, noShadow: true }
+    { s: 'XII век', f: 'P9', size: 170, col: P.ink, x: 1230, y: 300, t0: 6.35, t1: 9.25, fin: 'up', din: 0.6, noShadow: true },
+    { s: 'до н. э.', f: 'Pi', size: 84, col: P.ink, x: 1240, y: 400, t0: 6.85, t1: 9.3, fin: 'slide', noShadow: true },
+    { s: 'ДОРИЙЦЫ', f: 'O7', size: 150, col: P.terra, x: 1230, y: 610, t0: 7.7, t1: 9.35, fin: 'track', din: 0.8, noShadow: true }
   );
 }
 
@@ -666,11 +666,13 @@ function sceneV(t, cam0) {
   });
   layer(cam, 1000, g => {
     // флаг завоевателей
-    const fx = -1250;
+    const fx = -1250, flagA = 1 - E.s(rng(t, 19.6, 20.4));
+    g.save(); g.globalAlpha = flagA;
     softShadow(g, fx, GROUND + 3, 40, 8, 0.2);
     line(g, fx, GROUND, fx, GROUND - 430, 9);
     const wv = Math.sin(t * 4) * 8;
     g.beginPath(); g.moveTo(fx, GROUND - 430); g.quadraticCurveTo(fx + 90, GROUND - 420 + wv, fx + 170, GROUND - 390); g.quadraticCurveTo(fx + 90, GROUND - 370 - wv, fx, GROUND - 340); g.closePath(); fillStroke(g, P.terra, 6);
+    g.restore();
     // илоты — под основанием (рисуются до плит)
     for (const i of HELOTS) person(g, local(i, t), t);
     const baseShake = t > 36 ? Math.sin(t * 17) * 1.6 : 0;
